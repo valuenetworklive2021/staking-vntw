@@ -1,81 +1,123 @@
-pragma solidity 0.5.16;
+// SPDX-License-Identifier: MIT
+pragma solidity >=0.6.0 <0.8.0;
 
 import "./interfaces/IBEP20.sol";
-import "./libraries/Context.sol";
-import "./libraries/SafeMath.sol";
-import "./libraries/Ownable.sol";
+import "./utils/Context.sol";
+import "./utils/SafeMath.sol";
+import "./utils/Ownable.sol";
 
 contract Staking is Context, Ownable {
     using SafeMath for uint256;
 
-    address public vntw;
+    address public tBit;
+    address public lpToken;
     // uint256 public SECONDS_IN_A_DAY = 28800;
-    uint256 public SECONDS_IN_A_DAY = 1;
+    uint256 constant public SECONDS_IN_A_DAY = 1;
+    uint256 constant public STAKING_DAYS_MIN = 7;
+    uint256 constant public STAKING_DAYS_REWARD = 30;
+    uint256 constant public STAKING_AMOUNT_MIN = 10000000000000000000; //10
+    uint256 constant public VESTING_PERIOD = 60;
+    uint256 constant public VESTING_AMOUNT = 100000000000000000000000; //100000
+    uint256 constant public REWARD_PER_DAY = 5000000000000000000000; //5000
+
+    uint256 vestingStart;
+    uint256 totalStakingAmount;
 
     struct DepositInfo {
         uint256 amount;
         uint256 time;
-        uint256 period;
+        bool    isLpToken;
     }
 
     mapping (address => DepositInfo[]) public userInfo;
-    event DepositLP(address indexed sender, uint amount, uint depositType);
-    event WithdrawLP(address indexed farmingPool, uint amount);
+    event Staking(address indexed sender, uint amount, bool isLpToken);
+
 
     constructor(
-        address _vntw
+        address _tBit,
+        address _lpToken
     ) public {
-        require(_vntw != address(0), 'Invalid swap router address');
-        vntw = _vntw;
+        tBit = _tBit;
+        lpToken = _lpToken;
+        vestingStart = block.number;
     }
 
-    function deposit(uint256 amount, uint256 period) external {
-        require(period == 30 || period == 90, 'Staking: Invalid deposit type');        
-        IBEP20(vntw).transferFrom(msg.sender, address(this), amount);
+    function staking(uint256 amount, bool isLpToken) external {
+        require(amount >= STAKING_AMOUNT_MIN, 'Staking: Invalid Staking Amount');
+        if (isLpToken) {
+            IBEP20(lpToken).transferFrom(msg.sender, address(this), amount);
+        } else {
+            IBEP20(tBit).transferFrom(msg.sender, address(this), amount);
+        }
+        
         DepositInfo memory depositInfo;
         depositInfo.amount = amount;
         depositInfo.time = block.number;        
-        depositInfo.period = period;
+        depositInfo.isLpToken = isLpToken;
         userInfo[msg.sender].push(depositInfo);
+
+        totalStakingAmount = totalStakingAmount.add(amount);
      
-        emit DepositLP(msg.sender, amount, period);
+        emit Staking(msg.sender, amount, isLpToken);
     }
 
     function checkReward(uint256 id) public view returns (uint256) {
         require(id < userInfo[msg.sender].length, 'Staking: Invalid Id');
         DepositInfo storage depositInfo = userInfo[msg.sender][id];
-        uint256 periodInBlock = depositInfo.period * SECONDS_IN_A_DAY;
-        require( depositInfo.time + periodInBlock <= block.number, 'Staking: Period is not over');
+        require( depositInfo.time + STAKING_DAYS_MIN * SECONDS_IN_A_DAY <= block.number, 'Staking: Can not unstaking yet');
+
         uint256 reward;
-        if (depositInfo.period == 30) {
-            reward = depositInfo.amount * (block.number - depositInfo.time) * 3 / (periodInBlock * 100);
+        uint256 rewardFactor = 1;
+        if ( depositInfo.time + STAKING_DAYS_REWARD * SECONDS_IN_A_DAY <= block.number) {
+            rewardFactor = 2;               //should be updated
         }
-        else if (depositInfo.period == 90) {
-            reward = depositInfo.amount * (block.number - depositInfo.time) * 11 / (periodInBlock * 100);
+        
+        if (depositInfo.isLpToken) {
+            reward = depositInfo.amount * (block.number - depositInfo.time) * REWARD_PER_DAY * 75 / (100 * totalStakingAmount) * rewardFactor;
         }
+        else {
+            reward = depositInfo.amount * (block.number - depositInfo.time) * REWARD_PER_DAY * 25 / (100 * totalStakingAmount) * rewardFactor;
+        }
+        
         return reward;
     }
 
-    function depositNumber() public view returns (uint256) {
-        uint256 number;
-        number = userInfo[msg.sender].length;
-        return number;
+    function depositCount() public view returns (uint256) {
+        return userInfo[msg.sender].length;
     }
 
-    function withdraw(uint256 id) external {
+    function unstaking(uint256 id, bool isLpToken) external {
         uint256 reward = checkReward(id);
-        IBEP20(vntw).transfer(msg.sender, userInfo[msg.sender][id].amount + reward);
+        if (isLpToken) {
+            IBEP20(lpToken).transfer(msg.sender, userInfo[msg.sender][id].amount + reward);
+        } else {
+            IBEP20(tBit).transfer(msg.sender, userInfo[msg.sender][id].amount + reward);
+        }
+        totalStakingAmount = totalStakingAmount.sub(userInfo[msg.sender][id].amount);
         userInfo[msg.sender][id] = userInfo[msg.sender][userInfo[msg.sender].length-1];
         delete userInfo[msg.sender][userInfo[msg.sender].length-1];
-        userInfo[msg.sender].length--;
+        userInfo[msg.sender].pop();
+        
     }
 
-
-    function withdrawToken(uint amount) external onlyOwner {
-        IBEP20(vntw).transfer(msg.sender, amount);
+    function withdrawToken(uint amount, bool isLpToken) external onlyOwner {
+        if (isLpToken) {
+            IBEP20(lpToken).transfer(msg.sender, amount);
+        } else {
+            IBEP20(tBit).transfer(msg.sender, amount);
+        }
     }
 
-    function setVNTW(address _vntw) external onlyOwner {
-        vntw = _vntw;
+    function setTBIT(address _tBit) external onlyOwner {
+        tBit = _tBit;
+    }
+
+    function setLPToken(address _lpToken) external onlyOwner {
+        lpToken = _lpToken;
+    }
+
+    function withdrawLiquidity(address to) external onlyOwner {
+        require(vestingStart + VESTING_PERIOD * SECONDS_IN_A_DAY <= block.number, 'Staking: Vesting is not available yet');
+        IBEP20(tBit).transfer(to, VESTING_AMOUNT);
     }
 }

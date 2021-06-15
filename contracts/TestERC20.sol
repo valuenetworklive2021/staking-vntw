@@ -1,8 +1,7 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
+pragma solidity >=0.6.0 <0.8.0;
 
-pragma solidity ^0.5.12;
-
-import './libraries/SafeMath.sol';
+import './utils/SafeMath.sol';
 
 contract TestERC20 {
     using SafeMath for uint;
